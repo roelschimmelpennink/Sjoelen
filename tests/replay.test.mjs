@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {World, FIXED_DT, CENTERS} from '../dist/physics.js';
-import {recordReplayImpact, replayFocusAt} from '../dist/experience.js';
+import {World, FIXED_DT, CENTERS} from '../public/physics.js';
+import {recordReplayImpact, replayFocusAt} from '../public/experience.js';
 
 const stationary=(id,z)=>({id,x:CENTERS[1],z,vx:0,vz:0,rotation:0,spin:0});
 

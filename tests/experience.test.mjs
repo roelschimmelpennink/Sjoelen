@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {powerForHold, cinematicPose} from '../dist/experience.js';
-import {World, CENTERS, speedForPower} from '../dist/physics.js';
+import {powerForHold, cinematicPose} from '../public/experience.js';
+import {World, CENTERS, speedForPower} from '../public/physics.js';
 
 test('A quick click respects the chosen slider power',()=>{
   for(const preset of [5,25,56,85,100])assert.equal(powerForHold(100,preset),preset);

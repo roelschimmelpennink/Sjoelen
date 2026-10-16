@@ -4,7 +4,17 @@ Een Nederlandstalige 3D-sjoelgame, gemaakt met Three.js en een zelfstandige phys
 
 ## Spelen
 
-Start vanuit deze map met `node server.mjs` en open http://127.0.0.1:4173.
+Start vanuit deze map met `node server.mjs` (Node.js 22.14 of hoger) en open http://127.0.0.1:4173. De lokale server bewaart online kamers in de genegeerde map `.local/`.
+
+## Online met twee spelers
+
+Klik boven de bak op **Online met z’n tweeën**, vul je naam in en maak een kamer. Deel de uitnodigingslink via **WhatsApp**, **E-mail** of **Kopieer link**. De ontvanger opent de link, kiest een naam en kan zonder account meespelen. WhatsApp en e-mail openen een bericht dat de speler zelf verstuurt.
+
+Jullie schuiven om de beurt, ieder op een eigen bak met 30 schijven en drie beurten. Beiden zien de actieve bak en worp; camera en filmische replay blijven vrij te bedienen. De hoogste eindscore wint. Revanche begint nadat beide spelers akkoord zijn. De schansinstelling bij het maken van de kamer geldt voor allebei en blijft tijdens de wedstrijd vaststaan.
+
+Kamers zijn 24 uur geldig. Bij een verbroken verbinding probeert het spel opnieuw verbinding te maken. Verversen in hetzelfde tabblad herstelt je spelersplek via een tabgebonden sessiesleutel. Sluit het tabblad dus niet zolang je wilt terugkeren. Alleen twee spelers kunnen de kamer bezetten; een uitnodigingslink geeft geen toegang tot de spelersbediening van een bestaande deelnemer. Terug naar alleen spelen herstelt je lokale solo-spel.
+
+De server berekent de physics en puntentelling, bewaakt beurtvolgorde en revisies en verwerkt een opnieuw verstuurde actie eenmaal. Beide browsers spelen dezelfde worp lokaal af op basis van de gedeelde beginsituatie en invoer. De kamer wordt ongeveer elke 650 ms bijgewerkt (langzamer in achtergrondtabbladen). Dit is beurtgebaseerd online spel; er is geen WebRTC- of externe realtime-dienst nodig.
 
 - Plaats de schijf, kies een richting en stel de kracht in met de schuifregelaars. Een balkje op de richtingslijn toont die kracht ook op de bak zelf en vult zich tijdens het opladen. Het volgt de richting, ook bij een kaats via de zijwand.
 - Open **Speel met een schans** om een houten schans aan of uit te zetten. Kies de positie met de schuifjes of **Kies plek op de bak** en klik op een vrije plek. Esc annuleert het plaatsen. Je kunt de schans tussen worpen verplaatsen; de instelling blijft bewaard.
@@ -30,4 +40,10 @@ Voer `node --test tests/*.test.mjs` uit. De tests controleren onder andere punte
 
 ## Bestanden
 
-`dist/` is de complete publiceerbare game. `dist/physics.js` bevat de simulatie, `dist/scene.js` de 3D-weergave en `dist/app.js` de spel- en replaybediening. Three.js valt onder de MIT-licentie; DM Sans en Libre Caslon Display onder de SIL Open Font License. De licenties staan in `dist/vendor/`.
+`public/` bevat de browsergame. `public/physics.js` bevat de simulatie, `public/scene.js` de 3D-weergave, `public/app.js` de spel- en replaybediening en `public/multiplayer.js` kamers, uitnodigingen en verbinding. `worker/game.js` bewaakt de online spelregels; `worker/api.js` biedt de kamer-API. Three.js valt onder de MIT-licentie; DM Sans en Libre Caslon Display onder de SIL Open Font License. De licenties staan in `public/vendor/`.
+
+## Publiceren en database
+
+`node scripts/build.mjs` maakt een zelfstandige Cloudflare Worker in `dist/server/index.js`, inclusief alle browserbestanden. `dist/` is gegenereerd en wordt niet bijgehouden. De bestaande Sites-identiteit staat in `.openai/hosting.json`; binding `DB` is een D1-database. De Sites-publicatiestap past de SQL-migraties onder `drizzle/` toe. Er zijn geen runtimegeheimen of externe diensten nodig.
+
+Voor schemawijzigingen: installeer de vastgelegde ontwikkelhulpmiddelen met `npm ci`, wijzig `db/schema.ts` en voer `npm run db:generate` uit. Commit de nieuwe migratie en metadata. Wijzig eerder toegepaste migraties niet. De lokale database wordt bij de eerste start opgebouwd; deze is gescheiden van de gehoste database. Maak lokale schemawijzigingen via dezelfde nieuwe SQL-migraties voordat je met bestaande lokale data verder test.

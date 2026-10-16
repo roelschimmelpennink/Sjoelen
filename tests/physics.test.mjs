@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {World, CENTERS, GATE, HALF_WIDTH, RADIUS, FIXED_DT, VALUES, scoreCounts, pocketOf} from '../dist/physics.js';
+import {World, CENTERS, GATE, HALF_WIDTH, RADIUS, FIXED_DT, VALUES, scoreCounts, pocketOf} from '../public/physics.js';
 
 function settle(world) {let steps=0;while(world.moving&&steps++<3000)world.step(FIXED_DT);assert.ok(steps<3000,'The world must settle within 12.5 seconds');}
 const energy = w => w.pucks.reduce((sum,p)=>sum+p.vx*p.vx+p.vz*p.vz,0);

@@ -1,6 +1,7 @@
 import { World, FIXED_DT, HALF_WIDTH, RADIUS, LAUNCH_Z, CENTERS, VALUES, RAMP_MAX_X, normalizeRamp, pocketOf, scoreCounts, clamp } from './physics.js';
 import { SjoelScene } from './scene.js';
 import { HOLD_THRESHOLD_MS, powerForHold, recordReplayImpact, replayFocusAt } from './experience.js';
+import {Multiplayer} from './multiplayer.js';
 
 const $ = id => document.getElementById(id);
 const inputs = ['position','angle','power'].map($);
@@ -13,6 +14,7 @@ let replay = null, toastTimer, scene, animation;
 let previousScore = 0;
 let charge = null, suppressClickUntil = 0, activeShot = null;
 let rampPlacement=false;
+let online=null,onlineRevision=0,onlineShotId=null,onlineAnimating=false,onlineViewingSeat=0;
 const orbitHint = $('orbit-hint').innerHTML;
 
 class WoodAudio {
@@ -57,14 +59,16 @@ function updateAim() {
   $('position-value').textContent=cm===0?'Midden':`${cm} cm ${x<0?'links':'rechts'}`;
   $('angle-value').textContent=`${angle>0?'+':''}${angle.toLocaleString('nl-NL')}°`;
   $('power-value').innerHTML=`${$('power').value}<span>%</span>`;
-  scene?.setAim(x,angle,Number($('power').value),!moving&&!replay&&!finished&&reserve>0);
+  scene?.setAim(x,angle,Number($('power').value),!moving&&!replay&&!finished&&reserve>0&&!(online?.room&&online.busy));
 }
 function updateUI() {
+  const onlineLocked=!!online?.room&&online.busy;
+  $('score-label').textContent=online?.room?`SCORE VAN ${online.room.players[onlineViewingSeat]?.name||'JOU'}`:'JOUW SCORE';
   $('round').textContent=round;$('remaining').textContent=reserve;$('best').textContent=best;
   const counts=currentCounts(),score=scoreCounts(counts);counts.forEach((v,i)=>$(`count-${i}`).textContent=v);$('score').textContent=score;
   const ready=reserve===0&&!moving&&!finished;
-  inputs.forEach(input=>input.disabled=moving||!!replay||!!charge||finished||ready);
-  $('launch').disabled=moving||!!replay||rampPlacement;
+  inputs.forEach(input=>input.disabled=moving||!!replay||!!charge||finished||ready||onlineLocked);
+  $('launch').disabled=moving||!!replay||rampPlacement||onlineLocked||!!online?.room&&finished;
   $('launch').classList.toggle('charging',!!charge);
   $('launch').innerHTML=`<span>${charge?'Kracht kiezen…':moving?'De schijven glijden…':finished?'Speel nog eens':ready?'Volgende beurt':'Schuiven maar'}</span><svg><use href="#${moving?'i-orbit':'i-arrow'}"/></svg>`;
   $('keyboard-hint').innerHTML=charge?'Laat los om te schuiven · <kbd>Esc</kbd> annuleert':moving?`Worp met <b>${activeShot.power}%</b> kracht · even uit laten rollen.`:replay?'Je kijkt naar je laatste worp.':finished?'Een nieuw spel, een nieuwe kans.':ready?'De overgebleven schijven gaan weer terug.':'Klik voor ingestelde kracht · houd vast om op te laden<br>Ook met <kbd>spatie</kbd> · <kbd>Esc</kbd> annuleert';
@@ -73,15 +77,25 @@ function updateUI() {
   $('scene-status').textContent=replay?`${replay.cinematic?'Filmische replay':'Je laatste worp'} · ${lastShot.power}% kracht`:moving?`Schijf onderweg · ${activeShot.power}% kracht`:finished?'Een mooi potje sjoelen':'Jouw sjoelbak';
   $('replay-btn').disabled=!lastShot||moving||!!replay||!!charge;
   scene?.setStock(reserve);scene?.setLocked(locked);if(!replay)scene?.setRamp(world.ramp);updateAim();updateRampUI();
+  if(online?.room){
+    const room=online.room,player=room.players[onlineViewingSeat];
+    if(!moving&&!replay){
+      $('turn-title').textContent=!online.connected?'Even opnieuw verbinden…':room.phase==='waiting'?'Wie schuift er aan?':room.phase==='finished'?'Mooi gespeeld.':room.turn===room.you?'Jij bent aan de beurt.':`${room.players[room.turn].name} is aan de beurt.`;
+      $('turn-description').textContent=room.phase==='waiting'?'Deel je uitnodiging via de knop boven de bak.':room.phase==='finished'?$('online-status').textContent:room.turn===room.you?'Plaats, richt en geef ’m een zetje.':'Je kijkt live mee. Straks is jouw bak aan de beurt.';
+      $('launch').querySelector('span').textContent=online.pending?'Worp versturen…':room.phase==='waiting'?'Wacht op speler 2':room.phase==='finished'?'Wedstrijd afgelopen':onlineLocked?'Even wachten…':ready?'Volgende beurt':'Schuiven maar';
+    }
+    $('scene-status').textContent=replay?'Filmische replay':moving?`${player?.name} schuift · ${activeShot.power}% kracht`:`De bak van ${player?.name||'jou'}`;
+    $('keyboard-hint').innerHTML=moving?'Jullie zien dezelfde worp.':onlineLocked?'Je camera en replay blijven beschikbaar.':'Klik voor ingestelde kracht · houd vast om op te laden<br>Ook met <kbd>spatie</kbd> · <kbd>Esc</kbd> annuleert';
+  }
 }
 function setRampPlacement(enabled) {
   rampPlacement=enabled;scene?.setRampPlacement(enabled);
   $('ramp-place').setAttribute('aria-pressed',String(enabled));$('ramp-place').querySelector('span').textContent=enabled?'Klik op de bak…':'Kies plek op de bak';
   $('ramp-placement-hint').textContent=enabled?'Klik op een vrije plek. Esc annuleert het plaatsen.':'Of kies de positie met de schuifjes. Verplaats de schans tussen je worpen.';
-  $('launch').disabled=moving||!!replay||enabled;
+  $('launch').disabled=moving||!!replay||enabled||!!online?.room&&online.busy;
 }
 function updateRampUI() {
-  const r=world.ramp,disabled=moving||!!replay||!!charge||finished;
+  const r=world.ramp,disabled=moving||!!replay||!!charge||finished||!!online?.room;
   $('ramp-enabled').checked=r.enabled;$('ramp-enabled').disabled=disabled;
   $('ramp-status').textContent=r.enabled?'Aan':'Uit';$('ramp-status').classList.toggle('on',r.enabled);
   $('ramp-x').value=Math.round(r.x/RAMP_MAX_X*100);$('ramp-distance').value=Math.round((LAUNCH_Z-r.z)*100);
@@ -89,11 +103,11 @@ function updateRampUI() {
   for(const id of ['ramp-x','ramp-distance']){$(id).disabled=disabled;updateRange($(id));}$('ramp-place').disabled=disabled;
 }
 function applyRamp(config) {
-  if(moving||replay||charge||finished)return false;
+  if(moving||replay||charge||finished||online?.room)return false;
   if(!world.setRamp(config)){toast('Hier ligt een schijf. Kies een vrije plek voor de schans.');updateRampUI();return false;}
   setRampPlacement(false);updateUI();save();return true;
 }
-function save() {if(moving)return;storage.set('sjoelstudio-game',{version:2,round,reserve,locked,pucks:world.snapshot(),finished,ramp:world.ramp});}
+function save() {if(moving||online?.room)return;storage.set('sjoelstudio-game',{version:2,round,reserve,locked,pucks:world.snapshot(),finished,ramp:world.ramp});}
 function restore() {
   const saved=storage.get('sjoelstudio-game');
   if(!saved||![1,2].includes(saved.version)||!Number.isInteger(saved.round)||saved.round<1||saved.round>3||!Number.isInteger(saved.reserve)||saved.reserve<0||saved.reserve>30||!Array.isArray(saved.locked)||saved.locked.length!==4||!saved.locked.every(n=>Number.isInteger(n)&&n>=0&&n<=30)||!Array.isArray(saved.pucks)||saved.pucks.length>30)return;
@@ -105,6 +119,11 @@ function restore() {
 const BACK_SAFE = -1.06;
 function launch(powerOverride) {
   if(moving||replay||charge||rampPlacement||document.querySelector('dialog[open]'))return;
+  if(online?.room){
+    if(online.busy)return;
+    if(reserve===0){online.action({type:'next'});return;}
+    online.action({type:'shot',position:Number($('position').value),angle:Number($('angle').value),power:clamp(Number.isFinite(powerOverride)?powerOverride:Number($('power').value),5,100)});return;
+  }
   if(finished){$('reset-dialog').showModal();return;}
   if(reserve===0){nextRound();return;}
   audio.init();previousScore=currentScore();
@@ -116,7 +135,7 @@ function launch(powerOverride) {
   $('shot-toast').classList.remove('visible');audio.slide(power);updateUI();
 }
 function beginCharge(source, pointerId = null) {
-  if(charge||moving||replay||rampPlacement||finished||reserve===0||document.querySelector('dialog[open]'))return false;
+  if(charge||moving||replay||rampPlacement||finished||reserve===0||document.querySelector('dialog[open]')||online?.room&&online.busy)return false;
   charge={source,pointerId,started:performance.now(),preset:Number($('power').value)};
   audio.init();updateUI();announce('Houd vast om kracht op te bouwen. Laat los om te schuiven. Escape annuleert.');return true;
 }
@@ -141,6 +160,7 @@ function openHelp() {cancelCharge();setRampPlacement(false);if(!$('help-dialog')
 function settle() {
   moving=false;for(const p of world.pucks)p.vx=p.vz=p.vy=p.spin=0;
   frames.push({t:shotTime,pucks:world.snapshot()});lastShot={...activeShot,frames,duration:shotTime};
+  if(online?.room){onlineAnimating=false;applyOnlineBoard();toast('Worp klaar. '+$('online-status').textContent);return;}
   const counts=currentCounts(),score=scoreCounts(counts),delta=score-previousScore;
   const totalScored=counts.reduce((a,b)=>a+b,0);
   if(totalScored===30||(reserve===0&&round===3)){finished=true;if(score>best){best=score;storage.set('sjoelstudio-best',best);}toast(`Mooi gespeeld! Je eindscore is ${score} punten.`);}
@@ -157,6 +177,7 @@ function nextRound() {
   updateUI();save();toast(`Beurt ${round} · ${reserve} ${reserve===1?'schijf':'schijven'} terug op de stapel.`);
 }
 function resetGame() {
+  if(online?.room){$('reset-dialog').close();online.open();return;}
   cancelCharge();setRampPlacement(false);
   closeReplay();world.pucks=[];world.nextId=1;round=1;reserve=30;locked=[0,0,0,0];finished=moving=false;lastShot=null;frames=[];accumulator=0;
   $('position').value=-30;$('angle').value=0;$('power').value=56;
@@ -202,9 +223,40 @@ function loop(now) {
 function setView(view) {if(replay?.cinematic)setCinematic(false);scene.setView(view);document.querySelectorAll('.camera').forEach(button=>button.classList.toggle('active',button.dataset.view===view));}
 function updateSound() {$('sound-btn').innerHTML=`<svg><use href="#${audio.enabled?'i-sound':'i-mute'}"/></svg>`;$('sound-btn').setAttribute('aria-label',audio.enabled?'Geluid uit':'Geluid aan');$('sound-btn').title=audio.enabled?'Geluid uit':'Geluid aan';$('sound-btn').setAttribute('aria-pressed',String(audio.enabled));}
 
+function applyOnlineBoard() {
+  const room=online?.room;if(!room||onlineAnimating)return;
+  onlineViewingSeat=room.phase==='playing'?room.turn:room.you;
+  const board=room.players[onlineViewingSeat].board;
+  round=board.round;reserve=board.reserve;locked=[...board.locked];finished=room.phase==='finished';
+  world.restore(board.pucks);world.setRamp(room.ramp,false);previousScore=currentScore();updateUI();
+}
+function receiveOnlineRoom(room) {
+  if(!room||!scene)return;
+  if(room.revision!==onlineRevision){
+    cancelCharge();setRampPlacement(false);
+    const initial=onlineRevision===0;onlineRevision=room.revision;
+    if(initial){save();lastShot=null;moving=false;onlineAnimating=false;accumulator=0;closeReplay();}
+    const shot=room.lastShot;
+    if(shot&&shot.id!==onlineShotId&&Date.now()+online.clockOffset<room.readyAt){
+      closeReplay();onlineShotId=shot.id;onlineViewingSeat=shot.seat;
+      const board=room.players[shot.seat].board;
+      round=board.round;reserve=board.reserve;locked=[...board.locked];finished=false;
+      world.restore(shot.start);world.setRamp(shot.ramp,false);const puck=world.launch(shot.position/100*maxX,shot.angle,shot.power);
+      if(puck){activeShot={id:puck.id,power:shot.power,ramp:{...shot.ramp},focusTimeline:[{t:0,id:puck.id}]};moving=onlineAnimating=true;shotTime=0;steps=0;frames=[{t:0,pucks:world.snapshot()}];accumulator=0;audio.slide(shot.power);}
+    }else{onlineShotId=shot?.id||null;if(!onlineAnimating)applyOnlineBoard();}
+  }
+  updateUI();
+}
+function leaveOnline() {
+  cancelCharge();closeReplay();moving=onlineAnimating=false;onlineRevision=0;onlineShotId=null;lastShot=null;accumulator=0;
+  world.pucks=[];world.nextId=1;round=1;reserve=30;locked=[0,0,0,0];finished=false;restore();updateUI();toast('Je eigen spel staat weer klaar.');
+}
+
 try {
-  scene=new SjoelScene($('scene'),x=>{if(moving||charge||replay||finished||reserve===0)return;$('position').value=Math.round(x/maxX*100);updateAim();},()=>{if(replay?.cinematic)setCinematic(false);document.querySelectorAll('.camera').forEach(button=>button.classList.remove('active'));},(x,z)=>{if(applyRamp({enabled:true,x,z}))toast('De schans staat klaar. Geef je schijf voldoende kracht.');});
+  scene=new SjoelScene($('scene'),x=>{if(moving||charge||replay||finished||reserve===0||online?.room&&online.busy)return;$('position').value=Math.round(x/maxX*100);updateAim();},()=>{if(replay?.cinematic)setCinematic(false);document.querySelectorAll('.camera').forEach(button=>button.classList.remove('active'));},(x,z)=>{if(applyRamp({enabled:true,x,z}))toast('De schans staat klaar. Geef je schijf voldoende kracht.');});
   $('loading').remove();$('position').value=-30;restore();updateUI();updateSound();
+  online=new Multiplayer({beforeOpen(){cancelCharge();setRampPlacement(false);},getRamp:()=>world.ramp,onRoom:receiveOnlineRoom,onLeave:leaveOnline,toast});
+  setInterval(()=>{if(online?.room&&!moving&&!replay&&!charge)updateUI();},300);
   loop.previous=performance.now();animation=requestAnimationFrame(loop);
   inputs.forEach(input=>input.addEventListener('input',updateAim));
   $('launch').addEventListener('pointerdown',e=>{if(e.button!==0)return;if(beginCharge('pointer',e.pointerId)){$('launch').setPointerCapture(e.pointerId);}});
@@ -215,7 +267,7 @@ try {
   $('launch').addEventListener('click',()=>{if(performance.now()<suppressClickUntil)return;launch();});
   document.querySelectorAll('.camera').forEach(button=>button.addEventListener('click',()=>setView(button.dataset.view)));
   $('orbit-reset').addEventListener('click',()=>setView('perspective'));
-  $('new-game').addEventListener('click',()=>{cancelCharge();setRampPlacement(false);$('reset-dialog').showModal();});$('confirm-reset').addEventListener('click',resetGame);
+  $('new-game').addEventListener('click',()=>{cancelCharge();setRampPlacement(false);if(online?.room)online.open();else $('reset-dialog').showModal();});$('confirm-reset').addEventListener('click',resetGame);
   $('ramp-enabled').addEventListener('change',()=>applyRamp({...world.ramp,enabled:$('ramp-enabled').checked}));
   $('ramp-x').addEventListener('input',()=>applyRamp({...world.ramp,x:Number($('ramp-x').value)/100*RAMP_MAX_X}));
   $('ramp-distance').addEventListener('input',()=>applyRamp({...world.ramp,z:LAUNCH_Z-Number($('ramp-distance').value)/100}));

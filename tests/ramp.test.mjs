@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {World,FIXED_DT,GRAVITY,RAMP_HEIGHT,RAMP_LENGTH,RAMP_MAX_X,THICKNESS,pocketOf,normalizeRamp} from '../dist/physics.js';
-import {cinematicPose} from '../dist/experience.js';
+import {World,FIXED_DT,GRAVITY,RAMP_HEIGHT,RAMP_LENGTH,RAMP_MAX_X,THICKNESS,pocketOf,normalizeRamp} from '../public/physics.js';
+import {cinematicPose} from '../public/experience.js';
 
 const puck=(id,x,z,extra={})=>({id,x,z,vx:0,vz:0,rotation:0,spin:0,y:0,vy:0,tilt:0,airborne:false,onRamp:false,out:false,...extra});
 function jump(power){
