@@ -8,7 +8,7 @@ Start vanuit deze map met `node server.mjs` (Node.js 22.14 of hoger) en open htt
 
 ## Online met twee spelers
 
-Klik boven de bak op **Online met z’n tweeën**, vul je naam in en maak een kamer. Deel de uitnodigingslink via **WhatsApp**, **E-mail** of **Kopieer link**. De ontvanger opent de link, kiest een naam en kan zonder account meespelen. WhatsApp en e-mail openen een bericht dat de speler zelf verstuurt.
+Klik boven de bak op **Online met z’n tweeën**, vul je naam in en maak een kamer. Deel de uitnodigingslink via **WhatsApp**, **E-mail** of **Kopieer link**. De ontvanger komt via de link direct in de kamer, zonder formulier of account. Een eerder gebruikte naam wordt overgenomen; anders heet de gast **Speler 2**. Zodra de gast binnen is, sluit het uitnodigingsscherm van de gastheer automatisch en verschijnt een melding dat die kan beginnen. De uitnodigingsknoppen zijn alleen voor de gastheer zichtbaar zolang de tweede plek vrij is. WhatsApp en e-mail openen een bericht dat de speler zelf verstuurt.
 
 Jullie schuiven om de beurt, ieder op een eigen bak met 30 schijven en drie beurten. Beiden zien de actieve bak en worp; camera en filmische replay blijven vrij te bedienen. De hoogste eindscore wint. Revanche begint nadat beide spelers akkoord zijn. De schansinstelling bij het maken van de kamer geldt voor allebei en blijft tijdens de wedstrijd vaststaan.
 

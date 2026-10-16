@@ -3,7 +3,7 @@ const byId=id=>document.getElementById(id);
 const safeSession={get(key){try{return JSON.parse(sessionStorage.getItem(key));}catch{return null;}},set(key,value){try{sessionStorage.setItem(key,JSON.stringify(value));}catch{}}};
 export class Multiplayer {
   constructor(callbacks) {
-    this.callbacks=callbacks;this.room=null;this.token=null;this.pending=false;this.connected=false;this.timer=null;this.generation=0;this.clockOffset=0;this.lastPing=0;
+    this.callbacks=callbacks;this.room=null;this.token=null;this.pending=false;this.joining=false;this.arrivalNotice='';this.connected=false;this.timer=null;this.generation=0;this.clockOffset=0;this.lastPing=0;
     this.dialog=byId('online-dialog');this.invitedId=new URLSearchParams(location.hash.slice(1)).get('kamer');
     if(!/^[a-f0-9]{32}$/.test(this.invitedId||''))this.invitedId=null;
     byId('online-open').addEventListener('click',()=>this.open());
@@ -13,7 +13,13 @@ export class Multiplayer {
     byId('online-rematch').addEventListener('click',()=>this.action({type:'rematch'}));
     byId('online-new-room').addEventListener('click',()=>{this.invitedId=null;history.replaceState(null,'',location.pathname+location.search);this.open();});
     document.addEventListener('visibilitychange',()=>{if(!document.hidden&&this.room)this.pollSoon();});
-    if(this.invitedId){const saved=safeSession.get('sjoelstudio-room-'+this.invitedId);if(saved?.token)this.resume(saved.token);else this.open();}
+    window.addEventListener('hashchange',()=>{
+      const id=new URLSearchParams(location.hash.slice(1)).get('kamer');
+      if(!/^[a-f0-9]{32}$/.test(id||'')||id===this.room?.id||id===this.invitedId)return;
+      this.leave(false);this.invitedId=id;
+      const saved=safeSession.get('sjoelstudio-room-'+id);if(saved?.token)this.resume(saved.token);else this.enter(true);
+    });
+    if(this.invitedId){const saved=safeSession.get('sjoelstudio-room-'+this.invitedId);if(saved?.token)this.resume(saved.token);else this.enter(true);}
   }
   get busy(){return this.pending||!this.connected||!this.room||this.room.phase!=='playing'||this.room.turn!==this.room.you||Date.now()+this.clockOffset<this.room.readyAt;}
   get inviteUrl(){const url=new URL(location.href);url.search='';url.hash='kamer='+this.room.id;return url.href;}
@@ -23,14 +29,17 @@ export class Multiplayer {
     this.render();if(!this.dialog.open&&!document.querySelector('dialog[open]'))this.dialog.showModal();
   }
   render() {
-    const room=this.room;byId('online-setup').hidden=!!room;byId('online-lobby').hidden=!room;
-    byId('online-form-title').textContent=room?'Jullie online kamer.':this.invitedId?'Je bent uitgenodigd.':'Samen aan de bak.';
-    byId('online-new-room').hidden=!!room||!this.invitedId;
+    const room=this.room;byId('online-setup').hidden=!!room||this.joining;byId('online-lobby').hidden=!room;
+    byId('online-joining').hidden=!this.joining;
+    byId('online-form-title').textContent=this.joining?'Je neemt plaats…':room?'Jullie online kamer.':this.invitedId?'Je bent uitgenodigd.':'Samen aan de bak.';
+    byId('online-eyebrow').textContent=!room&&!this.invitedId||room?.phase==='waiting'?'TWEE SPELERS · ÉÉN UITNODIGING':'TWEE SPELERS · ONLINE SJOELEN';
+    byId('online-new-room').hidden=!!room||!this.invitedId||this.joining;
     byId('online-ramp-note').textContent=this.invitedId?'De schansinstelling van de gastheer geldt voor jullie allebei.':'De schans die nu op je bak staat, geldt voor allebei. Kies hem voor je de kamer maakt.';
     byId('online-submit').textContent=this.invitedId?'Doe mee':'Maak een kamer';byId('online-submit').disabled=this.pending;
     byId('online-banner').hidden=!room;byId('online-leave').hidden=!room;
     byId('online-open').textContent=room?'Jouw online kamer':'Online met z’n tweeën';
     if(!room)return;
+    byId('online-invitation').hidden=room.you!==0||room.phase!=='waiting';
     byId('online-link').value=this.inviteUrl;
     const message=`Kom je een potje sjoelen? Speel met mij mee in Sjoelstudio: ${this.inviteUrl}`;
     byId('online-whatsapp').href='https://wa.me/?text='+encodeURIComponent(message);
@@ -48,6 +57,7 @@ export class Multiplayer {
     }
     let status='Deel je uitnodigingslink om te beginnen.';
     if(room.phase==='playing')status=room.turn===room.you?'Jij bent aan de beurt.':`${room.players[room.turn].name} is aan de beurt. Kijk live mee.`;
+    if(this.arrivalNotice&&room.phase==='playing'&&!room.lastShot)status=this.arrivalNotice;
     if(room.phase==='finished'){
       const [a,b]=room.players;status=a.score===b.score?'Gelijkspel! Mooi gespeeld.':`${a.score>b.score?a.name:b.name} wint! ${a.score} – ${b.score} punten.`;
     }
@@ -64,20 +74,30 @@ export class Multiplayer {
     } finally {clearTimeout(timeout);}
   }
   receive(data) {
+    const previous=this.room;
     this.connected=true;
     if(data.room){this.room=data.room;this.clockOffset=data.room.serverNow-Date.now();this.invitedId=this.room.id;}
     else if(data.unchanged){this.clockOffset=data.serverNow-Date.now();this.room.players.forEach((p,i)=>p.online=data.online[i]);}
+    const arrived=previous?.phase==='waiting'&&this.room.phase==='playing'&&this.room.players.length===2&&this.room.you===0;
+    const entered=!previous&&this.room.you===1;
+    if(arrived)this.arrivalNotice=`${this.room.players[1].name} is binnen — jij mag beginnen.`;
+    if(entered||arrived){this.joining=false;if(this.dialog.open)this.dialog.close();}
     this.render();this.callbacks.onRoom(this.room);
+    if(arrived)this.callbacks.toast(this.arrivalNotice);
+    else if(entered)this.callbacks.toast(`Je bent binnen. ${this.room.players[0].name} begint met sjoelen.`);
   }
-  async enter() {
-    if(this.pending)return;const name=byId('online-name').value.trim();if(!name){byId('online-name').reportValidity();return;}
+  async enter(automatic=false) {
+    if(this.pending)return;const name=automatic?(safeSession.get('sjoelstudio-name')||'Speler 2'):byId('online-name').value.trim();if(!name){byId('online-name').reportValidity();return;}
+    if(automatic){this.joining=true;this.callbacks.beforeOpen();if(!this.dialog.open)this.dialog.showModal();}
     this.pending=true;this.render();byId('online-error').textContent='';
+    const generation=this.generation;
     try {
       const data=await this.request(this.invitedId?'/'+this.invitedId+'/join':'',{name,ramp:this.callbacks.getRamp()},null);
+      if(generation!==this.generation)return;
       this.token=data.token;safeSession.set('sjoelstudio-room-'+data.room.id,{token:this.token});safeSession.set('sjoelstudio-name',name);
       history.replaceState(null,'','#kamer='+data.room.id);this.receive(data);this.pollSoon();
-    } catch(error){byId('online-error').textContent=error.message;}
-    finally {this.pending=false;this.render();this.callbacks.onRoom(this.room);}
+    } catch(error){if(generation===this.generation){this.joining=false;this.open();byId('online-error').textContent=error.message;}}
+    finally {if(generation===this.generation){this.pending=false;this.joining=false;this.render();this.callbacks.onRoom(this.room);}}
   }
   async resume(token) {
     const generation=this.generation;
@@ -106,8 +126,8 @@ export class Multiplayer {
     }
     if(generation===this.generation)this.timer=setTimeout(()=>this.poll(),document.hidden?2500:650);
   }
-  leave() {
-    this.generation++;clearTimeout(this.timer);this.room=null;this.token=null;this.invitedId=null;this.pending=false;this.connected=false;
-    history.replaceState(null,'',location.pathname+location.search);this.render();this.callbacks.onLeave();
+  leave(clearLocation=true) {
+    this.generation++;clearTimeout(this.timer);this.room=null;this.token=null;this.invitedId=null;this.pending=false;this.joining=false;this.arrivalNotice='';this.connected=false;
+    if(clearLocation)history.replaceState(null,'',location.pathname+location.search);this.render();this.callbacks.onLeave();
   }
 }
