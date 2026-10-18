@@ -1,4 +1,4 @@
-import {GameError, createGame, joinGame, actGame, viewGame} from './game.js';
+import {GameError, createGame, joinGame, actGame, viewGame, validateAimPreview} from './game.js';
 
 const jsonResponse = (data,status=200) => Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}});
 const randomHex = bytes => Array.from(crypto.getRandomValues(new Uint8Array(bytes)),b=>b.toString(16).padStart(2,'0')).join('');
@@ -13,13 +13,18 @@ async function requestBody(request) {
   const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
   try {const body=JSON.parse(new TextDecoder().decode(bytes));if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();return body;} catch {throw new GameError('Ongeldig bericht.');}
 }
+async function readAimPreview(env,game) {
+  if(game.phase!=='playing')return null;
+  const preview=await env.DB.prepare('SELECT * FROM room_previews WHERE room_id=? AND revision=? AND seat=?').bind(game.id,game.revision,game.turn).first();
+  return preview?{...JSON.parse(preview.data),seat:preview.seat,revision:preview.revision,updatedAt:preview.updated_at}:null;
+}
 export async function multiplayerApi(request,env) {
   const url=new URL(request.url),now=Date.now();
   try {
     if(!env.DB)throw new GameError('Online spelen is tijdelijk niet beschikbaar.',503);
     const origin=request.headers.get('Origin');
     if(request.method!=='GET'&&origin&&origin!==url.origin)throw new GameError('Verzoek van een andere website geweigerd.',403);
-    const match=url.pathname.match(/^\/api\/rooms(?:\/([a-f0-9]{32})(?:\/(join|action|ping))?)?$/);
+    const match=url.pathname.match(/^\/api\/rooms(?:\/([a-f0-9]{32})(?:\/(join|action|ping|preview))?)?$/);
     if(!match)return jsonResponse({error:'Niet gevonden.'},404);
     const [,id,operation]=match;
     if(request.method==='POST'&&!id) {
@@ -32,6 +37,7 @@ export async function multiplayerApi(request,env) {
       await env.DB.prepare('INSERT INTO rooms (id,revision,data,expires_at,seen0) VALUES (?,?,?,?,?)').bind(roomId,game.revision,JSON.stringify(game),now+86400000,now).run();
       await env.DB.prepare('DELETE FROM rooms WHERE id IN (SELECT id FROM rooms WHERE expires_at<? LIMIT 100)').bind(now).run();
       await env.DB.prepare('DELETE FROM room_limits WHERE expires_at<?').bind(now).run();
+      await env.DB.prepare('DELETE FROM room_previews WHERE updated_at<?').bind(now-86400000).run();
       return jsonResponse({token,room:viewGame(game,0,[now,0],now)},201);
     }
     if(!id)throw new GameError('Niet gevonden.',404);
@@ -52,6 +58,11 @@ export async function multiplayerApi(request,env) {
       await env.DB.prepare(seat===0?'UPDATE rooms SET seen0=? WHERE id=?':'UPDATE rooms SET seen1=? WHERE id=?').bind(now,id).run();
       return jsonResponse({ok:true});
     }
+    if(request.method==='POST'&&operation==='preview') {
+      const body=await requestBody(request),preview=validateAimPreview(game,seat,body,now);
+      const result=await env.DB.prepare('INSERT INTO room_previews (room_id,seat,revision,data,updated_at) SELECT ?,?,?,?,? FROM rooms WHERE id=? AND revision=? ON CONFLICT(room_id) DO UPDATE SET seat=excluded.seat,revision=excluded.revision,data=excluded.data,updated_at=excluded.updated_at WHERE excluded.revision>room_previews.revision OR (excluded.revision=room_previews.revision AND excluded.updated_at>=room_previews.updated_at)').bind(id,seat,game.revision,JSON.stringify(preview),now,id,game.revision).run();
+      return jsonResponse({ok:result.meta.changes>0});
+    }
     if(request.method==='POST'&&operation==='action') {
       const body=await requestBody(request);
       if(actGame(game,seat,body,now)) {
@@ -59,8 +70,9 @@ export async function multiplayerApi(request,env) {
         if(!result.meta.changes)throw new GameError('De kamer is bijgewerkt. Probeer opnieuw.',409);
       }
     } else if(request.method!=='GET'||operation)throw new GameError('Niet gevonden.',404);
-    if(request.method==='GET'&&Number(url.searchParams.get('since'))===game.revision)return jsonResponse({unchanged:true,serverNow:now,online:[row.seen0,row.seen1].map(t=>now-t<25000)});
-    return jsonResponse({room:viewGame(game,seat,[row.seen0,row.seen1],now)});
+    const preview=await readAimPreview(env,game);
+    if(request.method==='GET'&&Number(url.searchParams.get('since'))===game.revision)return jsonResponse({unchanged:true,revision:game.revision,serverNow:now,online:[row.seen0,row.seen1].map(t=>now-t<25000),preview});
+    return jsonResponse({room:viewGame(game,seat,[row.seen0,row.seen1],now),preview});
   } catch(error) {
     if(!(error instanceof GameError))console.error('Multiplayer API:',error.message);
     return jsonResponse({error:error instanceof GameError?error.message:'De verbinding hapert. Probeer het zo nog eens.'},error.status||500);

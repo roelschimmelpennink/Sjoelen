@@ -6,3 +6,7 @@ export const rooms=sqliteTable('rooms',{
 export const roomLimits=sqliteTable('room_limits',{
   id:text('id').primaryKey().notNull(),count:integer('count').notNull(),expiresAt:integer('expires_at').notNull()
 });
+export const roomPreviews=sqliteTable('room_previews',{
+  roomId:text('room_id').primaryKey().notNull(),seat:integer('seat').notNull(),revision:integer('revision').notNull(),
+  data:text('data').notNull(),updatedAt:integer('updated_at').notNull()
+});

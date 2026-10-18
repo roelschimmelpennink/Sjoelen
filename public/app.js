@@ -15,6 +15,7 @@ let previousScore = 0;
 let charge = null, suppressClickUntil = 0, activeShot = null;
 let rampPlacement=false;
 let online=null,onlineRevision=0,onlineShotId=null,onlineAnimating=false,onlineViewingSeat=0;
+let onlineOwnAim=null;
 const orbitHint = $('orbit-hint').innerHTML;
 
 class WoodAudio {
@@ -52,14 +53,19 @@ function toast(text) {clearTimeout(toastTimer);$('shot-toast').textContent=text;
 function currentCounts() {return world.counts().map((v,i)=>v+locked[i]);}
 function currentScore() {return scoreCounts(currentCounts());}
 function updateRange(input) {input.style.setProperty('--fill',`${(input.value-input.min)/(input.max-input.min)*100}%`);}
-function updateAim() {
+function aimValues() {return {position:Number($('position').value),angle:Number($('angle').value),power:Number($('power').value)};}
+function setAimInputs(aim) {for(const key of ['position','angle','power'])$(key).value=aim[key];}
+function updateAim(broadcast=false) {
+  const remote=!moving&&!replay?online?.remoteAim:null;
+  if(remote)setAimInputs(remote);
+  if(broadcast&&online?.room&&online.room.turn===online.room.you){onlineOwnAim=aimValues();online.publishAim({...onlineOwnAim,charging:!!charge});}
   inputs.forEach(updateRange);
   const x=Number($('position').value)/100*maxX,angle=Number($('angle').value);
   const cm=Math.round(Math.abs(x)*100);
   $('position-value').textContent=cm===0?'Midden':`${cm} cm ${x<0?'links':'rechts'}`;
   $('angle-value').textContent=`${angle>0?'+':''}${angle.toLocaleString('nl-NL')}°`;
   $('power-value').innerHTML=`${$('power').value}<span>%</span>`;
-  scene?.setAim(x,angle,Number($('power').value),!moving&&!replay&&!finished&&reserve>0&&!(online?.room&&online.busy));
+  scene?.setAim(x,angle,Number($('power').value),!moving&&!replay&&!finished&&reserve>0&&(!(online?.room&&online.busy)||!!remote));
 }
 function updateUI() {
   const onlineLocked=!!online?.room&&online.busy;
@@ -86,6 +92,14 @@ function updateUI() {
     }
     $('scene-status').textContent=replay?'Filmische replay':moving?`${player?.name} schuift · ${activeShot.power}% kracht`:`De bak van ${player?.name||'jou'}`;
     $('keyboard-hint').innerHTML=moving?'Jullie zien dezelfde worp.':onlineLocked?'Je camera en replay blijven beschikbaar.':'Klik voor ingestelde kracht · houd vast om op te laden<br>Ook met <kbd>spatie</kbd> · <kbd>Esc</kbd> annuleert';
+    const remote=!moving&&!replay?online.remoteAim:null;
+    if(remote){
+      $('launch').querySelector('span').textContent=remote.charging?`${player.name} laadt op · ${remote.power}%`:`${player.name} richt…`;
+      $('keyboard-hint').textContent='Je ziet de plaatsing, richting en kracht van je tegenstander live.';
+      $('scene-status').textContent=remote.charging?`${player.name} kiest kracht · ${remote.power}%`:`${player.name} plaatst en richt`;
+      $('launch').classList.toggle('charging',remote.charging);
+      if(remote.charging)$('launch').style.setProperty('--charge-fill',`${remote.power}%`);else $('launch').style.removeProperty('--charge-fill');
+    }else if(!charge)$('launch').style.removeProperty('--charge-fill');
   }
 }
 function setRampPlacement(enabled) {
@@ -137,7 +151,7 @@ function launch(powerOverride) {
 function beginCharge(source, pointerId = null) {
   if(charge||moving||replay||rampPlacement||finished||reserve===0||document.querySelector('dialog[open]')||online?.room&&online.busy)return false;
   charge={source,pointerId,started:performance.now(),preset:Number($('power').value)};
-  audio.init();updateUI();announce('Houd vast om kracht op te bouwen. Laat los om te schuiven. Escape annuleert.');return true;
+  audio.init();updateUI();updateAim(true);announce('Houd vast om kracht op te bouwen. Laat los om te schuiven. Escape annuleert.');return true;
 }
 function takeCharge() {
   const current=charge;if(!current)return null;charge=null;
@@ -145,7 +159,7 @@ function takeCharge() {
   if(current.pointerId!==null&&$('launch').hasPointerCapture(current.pointerId))$('launch').releasePointerCapture(current.pointerId);
   $('launch').classList.remove('charging');$('launch').style.removeProperty('--charge-fill');return current;
 }
-function cancelCharge() {const current=takeCharge();if(!current)return;$('power').value=current.preset;updateUI();announce('Opladen geannuleerd.');}
+function cancelCharge() {const current=takeCharge();if(!current)return;$('power').value=current.preset;updateUI();updateAim(true);announce('Opladen geannuleerd.');}
 function releaseCharge() {
   const current=takeCharge();if(!current)return;
   const power=powerForHold(performance.now()-current.started,current.preset);
@@ -154,7 +168,7 @@ function releaseCharge() {
 function updateCharge(now) {
   if(!charge)return;
   const elapsed=now-charge.started,power=powerForHold(elapsed,charge.preset);
-  if(elapsed>=HOLD_THRESHOLD_MS){if(Number($('power').value)!==power){$('power').value=power;updateAim();}$('launch').querySelector('span').textContent=`${power}% kracht · laat los`;$('launch').style.setProperty('--charge-fill',`${power}%`);}
+  if(elapsed>=HOLD_THRESHOLD_MS){if(Number($('power').value)!==power){$('power').value=power;updateAim(true);}$('launch').querySelector('span').textContent=`${power}% kracht · laat los`;$('launch').style.setProperty('--charge-fill',`${power}%`);}
 }
 function openHelp() {cancelCharge();setRampPlacement(false);if(!$('help-dialog').open&&!$('reset-dialog').open)$('help-dialog').showModal();}
 function settle() {
@@ -229,18 +243,20 @@ function applyOnlineBoard() {
   const board=room.players[onlineViewingSeat].board;
   round=board.round;reserve=board.reserve;locked=[...board.locked];finished=room.phase==='finished';
   world.restore(board.pucks);world.setRamp(room.ramp,false);previousScore=currentScore();updateUI();
+  if(room.turn===room.you&&onlineOwnAim){setAimInputs(onlineOwnAim);updateAim(true);}
 }
 function receiveOnlineRoom(room) {
   if(!room||!scene)return;
   if(room.revision!==onlineRevision){
     cancelCharge();setRampPlacement(false);
     const initial=onlineRevision===0;onlineRevision=room.revision;
-    if(initial){save();lastShot=null;moving=false;onlineAnimating=false;accumulator=0;closeReplay();}
+    if(initial){onlineOwnAim=aimValues();save();lastShot=null;moving=false;onlineAnimating=false;accumulator=0;closeReplay();}
     const shot=room.lastShot;
     if(shot&&shot.id!==onlineShotId&&Date.now()+online.clockOffset<room.readyAt){
       closeReplay();onlineShotId=shot.id;onlineViewingSeat=shot.seat;
       const board=room.players[shot.seat].board;
       round=board.round;reserve=board.reserve;locked=[...board.locked];finished=false;
+      setAimInputs(shot);
       world.restore(shot.start);world.setRamp(shot.ramp,false);const puck=world.launch(shot.position/100*maxX,shot.angle,shot.power);
       if(puck){activeShot={id:puck.id,power:shot.power,ramp:{...shot.ramp},focusTimeline:[{t:0,id:puck.id}]};moving=onlineAnimating=true;shotTime=0;steps=0;frames=[{t:0,pucks:world.snapshot()}];accumulator=0;audio.slide(shot.power);}
     }else{onlineShotId=shot?.id||null;if(!onlineAnimating)applyOnlineBoard();}
@@ -249,16 +265,16 @@ function receiveOnlineRoom(room) {
 }
 function leaveOnline() {
   cancelCharge();closeReplay();moving=onlineAnimating=false;onlineRevision=0;onlineShotId=null;lastShot=null;accumulator=0;
-  world.pucks=[];world.nextId=1;round=1;reserve=30;locked=[0,0,0,0];finished=false;restore();updateUI();toast('Je eigen spel staat weer klaar.');
+  onlineOwnAim=null;world.pucks=[];world.nextId=1;round=1;reserve=30;locked=[0,0,0,0];finished=false;restore();updateUI();toast('Je eigen spel staat weer klaar.');
 }
 
 try {
-  scene=new SjoelScene($('scene'),x=>{if(moving||charge||replay||finished||reserve===0||online?.room&&online.busy)return;$('position').value=Math.round(x/maxX*100);updateAim();},()=>{if(replay?.cinematic)setCinematic(false);document.querySelectorAll('.camera').forEach(button=>button.classList.remove('active'));},(x,z)=>{if(applyRamp({enabled:true,x,z}))toast('De schans staat klaar. Geef je schijf voldoende kracht.');});
+  scene=new SjoelScene($('scene'),x=>{if(moving||charge||replay||finished||reserve===0||online?.room&&online.busy)return;$('position').value=Math.round(x/maxX*100);updateAim(true);},()=>{if(replay?.cinematic)setCinematic(false);document.querySelectorAll('.camera').forEach(button=>button.classList.remove('active'));},(x,z)=>{if(applyRamp({enabled:true,x,z}))toast('De schans staat klaar. Geef je schijf voldoende kracht.');});
   $('loading').remove();$('position').value=-30;restore();updateUI();updateSound();
   online=new Multiplayer({beforeOpen(){cancelCharge();setRampPlacement(false);},getRamp:()=>world.ramp,onRoom:receiveOnlineRoom,onLeave:leaveOnline,toast});
-  setInterval(()=>{if(online?.room&&!moving&&!replay&&!charge)updateUI();},300);
+  setInterval(()=>{if(online?.room&&!moving&&!replay&&!charge){updateUI();if(online.room.turn===online.room.you)updateAim(true);}},300);
   loop.previous=performance.now();animation=requestAnimationFrame(loop);
-  inputs.forEach(input=>input.addEventListener('input',updateAim));
+  inputs.forEach(input=>input.addEventListener('input',()=>updateAim(true)));
   $('launch').addEventListener('pointerdown',e=>{if(e.button!==0)return;if(beginCharge('pointer',e.pointerId)){$('launch').setPointerCapture(e.pointerId);}});
   $('launch').addEventListener('pointerup',e=>{if(charge?.source==='pointer'&&charge.pointerId===e.pointerId)releaseCharge();});
   $('launch').addEventListener('pointercancel',cancelCharge);
@@ -294,9 +310,9 @@ try {
     if(charge||active?.tagName==='INPUT')return;
     if(['1','2','3'].includes(e.key)){setView(['perspective','player','top'][Number(e.key)-1]);return;}
     if(e.key.toLowerCase()==='r'){startReplay();return;}
-    if(moving||replay||finished||reserve===0)return;
+    if(moving||replay||finished||reserve===0||online?.room&&online.busy)return;
     const map={ArrowLeft:['position',-3],ArrowRight:['position',3],a:['angle',-0.5],d:['angle',0.5],ArrowUp:['power',2],ArrowDown:['power',-2]};
-    const entry=map[e.key];if(entry){e.preventDefault();const input=$(entry[0]);input.value=clamp(Number(input.value)+entry[1],Number(input.min),Number(input.max));updateAim();}
+    const entry=map[e.key];if(entry){e.preventDefault();const input=$(entry[0]);input.value=clamp(Number(input.value)+entry[1],Number(input.min),Number(input.max));updateAim(true);}
   });
   document.addEventListener('keyup',e=>{if(e.code==='Space'&&charge?.source==='keyboard'){e.preventDefault();releaseCharge();}});
   window.addEventListener('blur',cancelCharge);

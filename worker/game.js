@@ -20,6 +20,14 @@ export function joinGame(game,name,tokenHash) {
   requireGame(game.phase==='waiting'&&game.players.length===1,'Deze kamer heeft al twee spelers.',409);
   game.players.push({name:playerName(name),tokenHash,board:emptyBoard(),lastAction:null});game.phase='playing';game.revision++;return game;
 }
+export function validateAimPreview(game,seat,body,now) {
+  requireGame(game.phase==='playing'&&game.turn===seat,'De andere speler is aan de beurt.',403);
+  requireGame(body.revision===game.revision,'Deze instellingen horen bij een vorige beurt.',409);
+  requireGame(now>=game.readyAt&&game.players[seat].board.reserve>0&&!game.players[seat].board.finished,'Je kunt nu geen worp voorbereiden.',409);
+  const {position,angle,power,charging}=body;
+  requireGame([position,angle,power].every(Number.isFinite)&&Math.abs(position)<=100&&Math.abs(angle)<=30&&power>=5&&power<=100&&typeof charging==='boolean','Ongeldige instellingen.');
+  return {position,angle,power,charging};
+}
 export function actGame(game,seat,body,now) {
   requireGame(typeof body.actionId==='string'&&/^[\w-]{8,80}$/.test(body.actionId),'Ongeldige actie.');
   if(game.players[seat].lastAction===body.actionId)return false;

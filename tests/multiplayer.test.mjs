@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFile} from 'node:fs/promises';
+import {migrateLocalDatabase} from '../scripts/local-database.mjs';
 import {multiplayerApi} from '../worker/api.js';
 import {createGame,joinGame,actGame,viewGame,emptyBoard,boardCounts} from '../worker/game.js';
 import {World,FIXED_DT,HALF_WIDTH,RADIUS} from '../public/physics.js';
 
 async function database() {
-  const db=new DatabaseSync(':memory:');db.exec(await readFile(new URL('../drizzle/0000_multiplayer.sql',import.meta.url),'utf8'));
+  const db=new DatabaseSync(':memory:');await migrateLocalDatabase(db);
   return {prepare(sql){return {bind(...args){return {async first(){return db.prepare(sql).get(...args)||null;},async run(){const result=db.prepare(sql).run(...args);return {meta:{changes:Number(result.changes)}};}};}};}};
 }
 const request=(path,body,token,origin)=>new Request('https://sjoelen.test/api/rooms'+path,{method:body?'POST':'GET',headers:{...(body?{'Content-Type':'application/json'}:{}),...(token?{Authorization:'Bearer '+token}:{}),...(origin?{Origin:origin}:{})},...(body?{body:JSON.stringify(body)}:{})});
@@ -73,4 +74,54 @@ test('API rejects cross-site writes, oversized payloads and simultaneous out-of-
   assert.equal(results[0].status,403);assert.equal(results[1].status,200);
   const repeat=await call(env,'/'+id+'/action',input,host.token);assert.equal(repeat.status,200);assert.equal(repeat.room.players[0].board.reserve,29);
   const ping=await call(env,'/'+id+'/ping',{},guest.token);assert.equal(ping.ok,true);
+});
+
+test('A guest needs a nonblank name before a seat is occupied',async()=>{
+  const env={DB:await database()},host=await call(env,'',{name:'Roel'}),id=host.room.id;
+  assert.equal((await call(env,'/'+id+'/join',{name:'   '})).status,400);
+  const waiting=await call(env,'/'+id,null,host.token);
+  assert.equal(waiting.room.phase,'waiting');assert.equal(waiting.room.players.length,1);
+  const guest=await call(env,'/'+id+'/join',{name:'  Lisa  '});assert.equal(guest.room.players[1].name,'Lisa');
+});
+
+test('Live placement, aim and charging reach the opponent without changing game state',async()=>{
+  const env={DB:await database()},host=await call(env,'',{name:'Roel'}),id=host.room.id;
+  const guest=await call(env,'/'+id+'/join',{name:'Lisa'}),revision=guest.room.revision;
+  const aim={revision,position:47,angle:-12.5,power:73,charging:false};
+  assert.equal((await call(env,'/'+id+'/preview',aim,host.token)).ok,true);
+  const first=await call(env,'/'+id+'?since='+revision,null,guest.token);
+  assert.equal(first.unchanged,true);
+  for(const key of ['position','angle','power','charging','revision'])assert.equal(first.preview[key],aim[key]);
+  assert.equal(first.preview.seat,0);assert.ok(Number.isFinite(first.preview.updatedAt));
+  await call(env,'/'+id+'/preview',{...aim,power:95,charging:true},host.token);
+  const charging=await call(env,'/'+id+'?since='+revision,null,guest.token);
+  assert.equal(charging.preview.power,95);assert.equal(charging.preview.charging,true);
+  await call(env,'/'+id+'/preview',aim,host.token);
+  const state=await call(env,'/'+id,null,guest.token);
+  assert.equal(state.preview.charging,false);assert.equal(state.room.revision,revision);
+  assert.equal(state.room.players[0].board.reserve,30);assert.equal(state.room.players[0].score,0);
+});
+
+test('Preview writes require the active seat and current turn, and expire on a real throw',async()=>{
+  const env={DB:await database()},host=await call(env,'',{name:'Roel'}),id=host.room.id;
+  const guest=await call(env,'/'+id+'/join',{name:'Lisa'}),revision=guest.room.revision;
+  const aim={revision,position:40,angle:15,power:50,charging:false};
+  assert.equal((await call(env,'/'+id+'/preview',aim)).status,401);
+  assert.equal((await call(env,'/'+id+'/preview',aim,guest.token)).status,403);
+  assert.equal((await call(env,'/'+id+'/preview',{...aim,revision:revision-1},host.token)).status,409);
+  for(const invalid of [{power:101},{position:101},{angle:-31},{power:null},{charging:'yes'}])assert.equal((await call(env,'/'+id+'/preview',{...aim,...invalid},host.token)).status,400);
+  await call(env,'/'+id+'/preview',aim,host.token);
+  const thrown=await call(env,'/'+id+'/action',{type:'shot',actionId:'preview-to-throw',revision,position:aim.position,angle:aim.angle,power:aim.power},host.token);
+  assert.equal(thrown.status,200);assert.equal(thrown.preview,null);assert.equal(thrown.room.turn,1);
+  assert.equal((await call(env,'/'+id+'/preview',aim,host.token)).status,403);
+  const opponent=await call(env,'/'+id,null,guest.token);assert.equal(opponent.preview,null);
+});
+
+test('Local upgrades apply each new migration once and preserve existing rooms',async()=>{
+  const db=new DatabaseSync(':memory:');db.exec(await readFile(new URL('../drizzle/0000_multiplayer.sql',import.meta.url),'utf8'));
+  db.prepare('INSERT INTO rooms (id,revision,data,expires_at,seen0) VALUES (?,?,?,?,?)').run('retained-room',2,'retained-data',999999,1234);
+  await migrateLocalDatabase(db);await migrateLocalDatabase(db);
+  assert.equal(db.prepare('SELECT data FROM rooms WHERE id=?').get('retained-room').data,'retained-data');
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='room_previews'").get());
+  assert.equal(db.prepare('SELECT COUNT(*) AS total FROM __local_migrations').get().total,2);db.close();
 });

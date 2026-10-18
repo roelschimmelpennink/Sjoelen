@@ -8,6 +8,13 @@
       "when": 1792176340224,
       "tag": "0000_multiplayer",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792314800742,
+      "tag": "0001_live_aim",
+      "breakpoints": true
     }
   ]
 }

@@ -233,11 +233,13 @@ export class SjoelScene {
     for (const puck of pucks) { let mesh=this.puckMeshes.get(puck.id); if(!mesh){mesh=this.makePuck();this.puckMeshes.set(puck.id,mesh);this.scene.add(mesh);} mesh.position.set(puck.x,(puck.y||0)+0.001,puck.z); mesh.rotation.set(puck.tilt||0,puck.rotation,0); }
   }
   setStock(count) {
+    if(this.stockCount===count)return;this.stockCount=count;
     this.stock.clear();
     const shown=Math.min(13,count);
     for(let i=0;i<shown;i++){const puck=this.makePuck(); const pile=i<7?0:1,level=i<7?i:i-7; puck.position.set(0.306 + pile*0.062,-0.047+level*0.014,0.77-pile*0.06); puck.rotation.y=i*0.53;this.stock.add(puck);}
   }
   setLocked(counts) {
+    const key=counts.join(',');if(this.lockedKey===key)return;this.lockedKey=key;
     this.locked.clear();
     counts.forEach((count,lane)=>{for(let i=0;i<count;i++){const puck=this.makePuck();puck.position.set(CENTERS[lane]+(i%2===0?-0.019:0.019),0.001+Math.floor(i/4)*0.014,-0.939+Math.floor(i%4/2)*0.059);puck.rotation.y=i*0.7;this.locked.add(puck);}});
   }
